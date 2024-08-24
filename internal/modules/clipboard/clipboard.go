@@ -127,18 +127,31 @@ func getType() string {
 	return fields[0]
 }
 
-func getContent() (string, string) {
-	cmd := exec.Command("wl-paste")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", ""
+func getContent(primary ...bool) string {
+	isPrimary := false
+	if len(primary) > 0 {
+		isPrimary = primary[0]
 	}
 
+	var cmd *exec.Cmd
+	if isPrimary {
+		cmd = exec.Command("wl-paste", "-p")
+	} else {
+		cmd = exec.Command("wl-paste")
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
 	txt := strings.TrimSpace(string(out))
+	return txt
+}
+
+func calcHash(txt string) string {
 	hash := md5.Sum([]byte(txt))
 	strg := hex.EncodeToString(hash[:])
-
-	return txt, strg
+	return strg
 }
 
 func saveTmpImg(ext string) string {
@@ -168,47 +181,50 @@ func (c *Clipboard) watch() {
 	for {
 		time.Sleep(500 * time.Millisecond)
 
-		content, hash := getContent()
+		contentList := []string{getContent(), getContent(true)}
+		for _, content := range contentList {
+			hash := calcHash(content)
 
-		if c.exists(hash) {
-			continue
+			if c.exists(hash) {
+				continue
+			}
+
+			if len(content) < 2 {
+				continue
+			}
+
+			mimetype := getType()
+
+			e := ClipboardItem{
+				Content: content,
+				Time:    time.Now(),
+				Hash:    hash,
+				IsImg:   false,
+			}
+
+			if val, ok := c.imgTypes[mimetype]; ok {
+				file := saveTmpImg(val)
+				e.Content = file
+				e.IsImg = true
+			} else {
+				cmd := exec.Command("wl-copy")
+				cmd.Stdin = strings.NewReader(e.Content)
+				cmd.Start()
+			}
+
+			c.entries = append([]util.Entry{itemToEntry(e)}, c.entries...)
+			c.items = append([]ClipboardItem{e}, c.items...)
+
+			if len(c.items) >= c.max {
+				c.items = slices.Clone(c.items[:c.max])
+			}
+
+			if len(c.entries) >= c.max {
+				c.entries = slices.Clone(c.entries[:c.max])
+			}
+
+			util.ToGob(&c.items, c.file)
 		}
-
-		if len(content) < 2 {
-			continue
-		}
-
-		mimetype := getType()
-
-		e := ClipboardItem{
-			Content: content,
-			Time:    time.Now(),
-			Hash:    hash,
-			IsImg:   false,
-		}
-
-		if val, ok := c.imgTypes[mimetype]; ok {
-			file := saveTmpImg(val)
-			e.Content = file
-			e.IsImg = true
-		} else {
-			cmd := exec.Command("wl-copy")
-			cmd.Stdin = strings.NewReader(e.Content)
-			cmd.Start()
-		}
-
-		c.entries = append([]util.Entry{itemToEntry(e)}, c.entries...)
-		c.items = append([]ClipboardItem{e}, c.items...)
-
-		if len(c.items) >= c.max {
-			c.items = slices.Clone(c.items[:c.max])
-		}
-
-		if len(c.entries) >= c.max {
-			c.entries = slices.Clone(c.entries[:c.max])
-		}
-
-		util.ToGob(&c.items, c.file)
 	}
 }
 
